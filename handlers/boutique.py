@@ -17,7 +17,6 @@ from typing import Any
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
-from aiogram.filters import Command
 from aiogram.types import (
     BufferedInputFile,
     CallbackQuery,
@@ -30,7 +29,7 @@ from aiogram.types import (
 
 from config import settings
 from database.connection import db
-from handlers.common import answer_error, hydrate
+from handlers.common import CommandOrText, answer_error, editable_message, hydrate
 from models.enums import ActivityKind
 from models.player import Player
 from services import avatar, economy, game
@@ -272,13 +271,14 @@ async def _build_boutique_catalog(
     total_pages = cat_data["total_pages"]
     cat_title = cat_data["title"]
 
+    own_label = "دخترانه" if is_female else "پسرانه"
+    other_label = "پسرانه" if is_female else "دخترانه"
     gender_notice = (
-        "✨ <b>امتیاز جنسیت شما:</b> ۴۰٪ تخفیف ویژه روی پوشاک دخترانه (۳۰۰ رکسار)!\n"
-        "🔥 پوشاک پسرانه: ۱,۲۰۰ رکسار (نرخ غیرهم‌جنسیت) | ⚧ اسپرت: ۵۰۰ رکسار"
-        if is_female
-        else
-        "✨ <b>امتیاز جنسیت شما:</b> ۴۰٪ تخفیف ویژه روی پوشاک پسرانه (۳۰۰ رکسار)!\n"
-        "🔥 پوشاک دخترانه: ۱,۲۰۰ رکسار (نرخ غیرهم‌جنسیت) | ⚧ اسپرت: ۵۰۰ رکسار"
+        f"✨ <b>امتیاز جنسیت شما:</b> هم‌جنس ({own_label}) "
+        f"<b>{settings.clothing_price_same_gender:,}</b> رکسار\n"
+        f"🔥 غیرهم‌جنس ({other_label}): "
+        f"<b>{settings.clothing_price_opposite:,}</b> رکسار"
+        f" | ⚧ اسپرت/یونیسکس: <b>{settings.clothing_price_unisex:,}</b> رکسار"
     )
 
     lines = [
@@ -508,25 +508,26 @@ async def _update_boutique_view(
     media_url: str | None = None,
 ) -> None:
     """Zero-bandwidth updater: edits caption in-place without downloading new photos."""
-    if not call.message:
+    message = editable_message(call)
+    if message is None:
         return
 
     if media_url:
         photo_payload = await _render_photo_payload(media_url, "boutique.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
             return
 
-    if call.message.photo:
+    if message.photo:
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_caption(caption=caption, reply_markup=markup, parse_mode="HTML")
+            await message.edit_caption(caption=caption, reply_markup=markup, parse_mode="HTML")
             return
 
     with contextlib.suppress(TelegramBadRequest):
-        await call.message.edit_text(text=caption, reply_markup=markup, parse_mode="HTML")
+        await message.edit_text(text=caption, reply_markup=markup, parse_mode="HTML")
 
 
 async def _build_wardrobe_card(
@@ -838,8 +839,7 @@ async def _build_skin_menu(user_id: int) -> tuple[str, str, InlineKeyboardMarkup
 # Message Handlers
 # -----------------------------------------------------------------------------
 
-@router.message(Command("boutique", "fashion", "shop"))
-@router.message(F.text.lower().in_(BOUTIQUE_COMMANDS))
+@router.message(CommandOrText(["boutique", "fashion", "shop"], words=BOUTIQUE_COMMANDS))
 async def handle_boutique_command(message: Message) -> None:
     """Open shop mini-app in Shop Mode (unified with /shop command)."""
     if not message.from_user:
@@ -895,7 +895,11 @@ async def handle_boutique_command(message: Message) -> None:
         await answer_error(exc, message=message)
 
 
-@router.message(F.text.lower().in_({"ویترین", "کاتالوگ", "ویترین بوتیک", "کاتالوگ بوتیک"}))
+@router.message(
+    CommandOrText(
+        words={"ویترین", "کاتالوگ", "ویترین بوتیک", "کاتالوگ بوتیک"},
+    )
+)
 async def handle_boutique_showcase_command(message: Message) -> None:
     """Directly open daily boutique photo & text showcase."""
     if not message.from_user:
@@ -914,8 +918,7 @@ async def handle_boutique_showcase_command(message: Message) -> None:
         await answer_error(exc, message=message)
 
 
-@router.message(Command("wardrobe", "closet"))
-@router.message(F.text.lower().in_(WARDROBE_COMMANDS))
+@router.message(CommandOrText(["wardrobe", "closet"], words=WARDROBE_COMMANDS))
 async def handle_wardrobe_command(message: Message) -> None:
     """Open personal wardrobe carousel."""
     if not message.from_user:
@@ -934,8 +937,7 @@ async def handle_wardrobe_command(message: Message) -> None:
     avatar.set_user_wardrobe_message(user_id, sent.chat.id, sent.message_id)
 
 
-@router.message(Command("avatar"))
-@router.message(F.text.lower().in_(AVATAR_COMMANDS))
+@router.message(CommandOrText(["avatar"], words=AVATAR_COMMANDS))
 async def handle_avatar_command(message: Message) -> None:
     """Show current character avatar and styling options."""
     if not message.from_user:
@@ -988,8 +990,7 @@ async def handle_avatar_command(message: Message) -> None:
     await message.reply_photo(photo=photo_payload, caption=caption, reply_markup=markup)
 
 
-@router.message(Command("customizer", "app"))
-@router.message(F.text.lower().in_(CUSTOMIZER_COMMANDS))
+@router.message(CommandOrText(["customizer", "app"], words=CUSTOMIZER_COMMANDS))
 async def handle_customizer_command(message: Message) -> None:
     """Launch or guide user to the character customizer Mini App."""
     if not message.from_user:
@@ -1037,7 +1038,7 @@ async def handle_customizer_command(message: Message) -> None:
             "✨ کلیه تغییرات بدون تاخیر روی ماکت اعمال شده و با زدن دکمه ذخیره، "
             "آواتار شما در ربات ثبت می‌گردد."
         )
-        buttons: list[list[InlineKeyboardButton]] = []
+        buttons = []
         if settings.webapp_url:
             custom_url = await avatar.get_customizer_url(user_id)
             buttons.append(
@@ -1277,13 +1278,17 @@ async def handle_customizer_webapp_data(message: Message) -> None:
 
 async def open_boutique_from_callback(call: CallbackQuery) -> None:
     """Open shop mini-app in Shop Mode (unified gateway for all boutique buttons)."""
+    message = editable_message(call)
+    if message is None:
+        await call.answer()
+        return
     if not call.from_user or not call.message:
         await call.answer()
         return
 
     user_id = call.from_user.id
     user = call.from_user
-    is_group = _is_group_chat(call.message.chat.type)
+    is_group = _is_group_chat(message.chat.type)
 
     try:
         player = await hydrate(user_id, user.full_name, user.username)
@@ -1329,21 +1334,21 @@ async def open_boutique_from_callback(call: CallbackQuery) -> None:
             ]
         )
 
-        if call.message.photo:
+        if message.photo:
             with contextlib.suppress(Exception):
-                await call.message.delete()
-            await call.message.answer(text, reply_markup=markup)
+                await message.delete()
+            await message.answer(text, reply_markup=markup)
             await call.answer()
             return
 
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_text(text, reply_markup=markup)
+            await message.edit_text(text, reply_markup=markup)
             await call.answer()
             return
 
         with contextlib.suppress(Exception):
-            await call.message.delete()
-        await call.message.answer(text, reply_markup=markup)
+            await message.delete()
+        await message.answer(text, reply_markup=markup)
         await call.answer()
 
     except Exception as exc:  # noqa: BLE001
@@ -1354,6 +1359,10 @@ async def open_boutique_from_callback(call: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("btq:"))
 async def handle_boutique_callback(call: CallbackQuery) -> None:
     """Handle all boutique interactions with zero image bandwidth waste."""
+    message = editable_message(call)
+    if message is None:
+        await call.answer()
+        return
     if not call.from_user or not call.data or not call.message:
         await call.answer()
         return
@@ -1373,15 +1382,15 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             user_id=user_id,
             category=cat_key,
             page=page,
-            in_group=_is_group_chat(call.message.chat.type),
+            in_group=_is_group_chat(message.chat.type),
         )
-        if call.message.photo:
+        if message.photo:
             await _update_boutique_view(call, caption=caption, markup=markup, media_url=None)
         else:
             photo_payload = await _render_photo_payload(render_url, "boutique.png")
             with contextlib.suppress(Exception):
-                await call.message.delete()
-            await call.message.answer_photo(
+                await message.delete()
+            await message.answer_photo(
                 photo=photo_payload,
                 caption=caption,
                 reply_markup=markup,
@@ -1393,7 +1402,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
         avatar.clear_user_wardrobe_message(user_id)
         await call.answer()
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.delete()
+            await message.delete()
         return
 
     if action == "cat":
@@ -1403,7 +1412,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
                 user_id=user_id,
                 category=cat_key,
                 page=0,
-                in_group=_is_group_chat(call.message.chat.type),
+                in_group=_is_group_chat(message.chat.type),
             )
             await _update_boutique_view(call, caption=caption, markup=markup, media_url=None)
             await call.answer()
@@ -1417,7 +1426,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             is_preview=False,
         )
         try:
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=render_url, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1433,7 +1442,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             user_id=user_id,
             category=cat_key,
             page=page,
-            in_group=_is_group_chat(call.message.chat.type),
+            in_group=_is_group_chat(message.chat.type),
         )
         await _update_boutique_view(call, caption=caption, markup=markup, media_url=None)
         await call.answer()
@@ -1529,7 +1538,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             is_preview=is_preview,
         )
         try:
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=render_url, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1550,7 +1559,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             is_preview=is_preview,
         )
         try:
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=render_url, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1594,7 +1603,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             is_preview=False,
         )
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=render_url, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1617,7 +1626,7 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
             is_preview=True,
         )
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=render_url, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1629,6 +1638,10 @@ async def handle_boutique_callback(call: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("wdr:"))
 async def handle_wardrobe_callback(call: CallbackQuery) -> None:
     """Handle wardrobe interactions and skin tone selection."""
+    message = editable_message(call)
+    if message is None:
+        await call.answer()
+        return
     if not call.from_user or not call.data or not call.message:
         await call.answer()
         return
@@ -1639,11 +1652,11 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
 
     if action == "sets_list":
         render_url, caption, markup = await _build_outfit_switch_menu(
-            user_id=user_id, in_group=_is_group_chat(call.message.chat.type)
+            user_id=user_id, in_group=_is_group_chat(message.chat.type)
         )
         photo_payload = await _render_photo_payload(render_url, "wardrobe.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1655,7 +1668,7 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
         render_url, caption, markup = await _build_wardrobe_items_menu(user_id=user_id, page=page)
         photo_payload = await _render_photo_payload(render_url, "wardrobe.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1670,7 +1683,7 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
         render_url, caption, markup = await _build_wardrobe_items_menu(user_id=user_id, page=page)
         photo_payload = await _render_photo_payload(render_url, "wardrobe.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1684,22 +1697,22 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
         render_url, caption, markup = await _build_wardrobe_items_menu(user_id=user_id, page=page)
         photo_payload = await _render_photo_payload(render_url, "wardrobe.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
         return
 
-    avatar.set_user_wardrobe_message(user_id, call.message.chat.id, call.message.message_id)
+    avatar.set_user_wardrobe_message(user_id, message.chat.id, message.message_id)
 
     if action in ("open", "nav", "view"):
         idx = int(parts[2]) if len(parts) > 2 else 0
         render_url, caption, markup = await _build_wardrobe_card(
-            user_id=user_id, index=idx, in_group=_is_group_chat(call.message.chat.type)
+            user_id=user_id, index=idx, in_group=_is_group_chat(message.chat.type)
         )
         photo_payload = await _render_photo_payload(render_url, "wardrobe.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1721,11 +1734,11 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
             await call.answer(f"خطا: {exc}", show_alert=True)
 
         render_url, caption, markup = await _build_wardrobe_card(
-            user_id=user_id, index=0, in_group=_is_group_chat(call.message.chat.type)
+            user_id=user_id, index=0, in_group=_is_group_chat(message.chat.type)
         )
         photo_payload = await _render_photo_payload(render_url, "wardrobe.png")
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=photo_payload, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1736,10 +1749,10 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
         await avatar.unequip(user_id)
         await call.answer("لباس‌های کاراکتر درآورده شد.", show_alert=True)
         render_url, caption, markup = await _build_wardrobe_card(
-            user_id=user_id, index=idx, in_group=_is_group_chat(call.message.chat.type)
+            user_id=user_id, index=idx, in_group=_is_group_chat(message.chat.type)
         )
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(media=render_url, caption=caption, parse_mode="HTML"),
                 reply_markup=markup,
             )
@@ -1750,7 +1763,7 @@ async def handle_wardrobe_callback(call: CallbackQuery) -> None:
 
         render_url, caption, markup = await salon_h._build_solarium_menu(user_id)
         with contextlib.suppress(TelegramBadRequest):
-            await call.message.edit_media(
+            await message.edit_media(
                 media=InputMediaPhoto(
                     media=render_url, caption=caption, parse_mode="HTML"
                 ),

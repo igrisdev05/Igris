@@ -36,6 +36,7 @@ from handlers.common import (
     answer_error,
     editable_message,
     esc,
+    extract_args,
     hydrate,
     resolve_target_player,
 )
@@ -102,7 +103,7 @@ async def cmd_duel(message: Message, command: CommandObject | None = None) -> No
     if user is None:
         return
     try:
-        raw_args = command.args if command and command.args else (message.text or "")
+        raw_args = " ".join(extract_args(message, command))
         stake_arg, token = _parse_stake_text(raw_args)
         stake = stake_arg if stake_arg is not None else settings.duel_min_bet
         if not settings.duel_min_bet <= stake <= settings.duel_max_bet:
@@ -132,13 +133,8 @@ async def cmd_duel(message: Message, command: CommandObject | None = None) -> No
                 f"موجودی شما برای این شرط‌بندی کافی نیست! (موجودی شما: {c1:,} رکسار)"
             )
 
-        # Check opponent balance
-        c2, _ = await economy.balances(opponent.user_id)
-        if c2 < stake:
-            raise GameError(
-                f"موجودی {esc(opponent.display_tag)} برای این شرط‌بندی کافی نیست! "
-                f"(موجودی حریف: {c2:,} رکسار)"
-            )
+        # موجودی حریف اینجا چک نمی‌شود: چالش ارسال می‌شود و اگر در لحظه قبول
+        # موجودی کافی نداشته باشد، همان‌جا به او پیام داده می‌شود.
 
         economy.require_ready(user.id, "duel", settings.cooldown_duel)
 
@@ -336,6 +332,16 @@ async def cb_accept(call: CallbackQuery) -> None:
 
         challenger = await hydrate(duel["challenger_id"], "Challenger", None)
         opponent = await hydrate(user.id, user.full_name, user.username)
+
+        # شرط حریف دقیقاً در لحظه قبول بررسی می‌شود (نه لحظه ارسال درخواست).
+        opponent_cash, _ = await economy.balances(opponent.user_id)
+        if opponent_cash < duel["stake"]:
+            await call.answer(
+                "❌ موجودی کافی برای قبول این دوئل نداری! "
+                f"(شرط: {duel['stake']:,} — موجودی تو: {opponent_cash:,} رکسار)",
+                show_alert=True,
+            )
+            return
 
         # Escrow the opponent first: if they can't pay, nothing resolves.
         await _accept_escrow(duel, opponent)
